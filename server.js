@@ -138,11 +138,25 @@ Answer their questions specifically based on their resume to help them improve i
   }
 })
 
-if (process.env.NODE_ENV !== 'production') {
-  app.listen(port, () => {
+const startServer = () => {
+  if (process.env.NODE_ENV === 'production') {
+    return
+  }
+
+  const server = app.listen(port, () => {
     console.log(`Server listening on http://localhost:${port}`)
   })
+
+  server.on('error', (error) => {
+    if (error.code === 'EADDRINUSE') {
+      console.error(`Port ${port} is already in use. Stop the other server or use a different port.`)
+    } else {
+      console.error('Server startup error:', error)
+    }
+  })
 }
+
+startServer()
 
 export default app
 
