@@ -9,13 +9,18 @@ const app = express()
 app.use(cors())
 const port = process.env.PORT || 3000
 const apiKey = process.env.GEMINI_API_KEY
+let genAI = null
 
-if (!apiKey) {
-  console.error('Missing GEMINI_API_KEY environment variable.')
-  process.exit(1)
+if (apiKey) {
+  genAI = new GoogleGenerativeAI(apiKey)
 }
 
-const genAI = new GoogleGenerativeAI(apiKey)
+const getGenerativeClient = () => {
+  if (!genAI) {
+    throw new Error('Missing GEMINI_API_KEY environment variable.')
+  }
+  return genAI
+}
 
 const cleanModelText = (text) => {
   let cleaned = text.trim()
@@ -35,6 +40,10 @@ const cleanModelText = (text) => {
 
 app.use(express.json())
 
+app.get('/', (_req, res) => {
+  res.json({ status: 'ok', message: 'Resume analyzer backend is running.' })
+})
+
 app.post('/api/analyze', async (req, res) => {
   const { resumeText, jobDescription } = req.body
 
@@ -42,8 +51,10 @@ app.post('/api/analyze', async (req, res) => {
     return res.status(400).json({ error: 'Resume text is required.' })
   }
 
-  const model = genAI.getGenerativeModel({ model: 'gemini-flash-lite-latest' })
-  const prompt = `
+  try {
+    const client = getGenerativeClient()
+    const model = client.getGenerativeModel({ model: 'gemini-flash-lite-latest' })
+    const prompt = `
 You are an expert HR professional and ATS (Applicant Tracking System) algorithm.
 Analyze the following resume against the provided target job description.
 
@@ -62,15 +73,19 @@ Return ONLY a valid JSON object with the following structure (no markdown blocks
 }
 `
 
-  try {
-    const result = await model.generateContent(prompt)
-    const response = await result.response
-    const text = cleanModelText(response.text())
-    const parsed = JSON.parse(text)
-    return res.json(parsed)
+    try {
+      const result = await model.generateContent(prompt)
+      const response = await result.response
+      const text = cleanModelText(response.text())
+      const parsed = JSON.parse(text)
+      return res.json(parsed)
+    } catch (error) {
+      console.error('Error calling Gemini API:', error)
+      return res.status(500).json({ error: 'Failed to analyze resume. Please try again.' })
+    }
   } catch (error) {
-    console.error('Error calling Gemini API:', error)
-    return res.status(500).json({ error: 'Failed to analyze resume. Please try again.' })
+    console.error('Missing Gemini configuration:', error.message)
+    return res.status(500).json({ error: 'Server is not configured with GEMINI_API_KEY.' })
   }
 })
 
@@ -81,7 +96,9 @@ app.post('/api/chat', async (req, res) => {
     return res.status(400).json({ error: 'Message is required.' })
   }
 
-  const systemContext = `
+  try {
+    const client = getGenerativeClient()
+    const systemContext = `
 You are a helpful career coach and resume expert.
 The user has uploaded their resume and optionally a target job description.
 
@@ -93,27 +110,31 @@ ${jobDescription || 'Not provided.'}
 
 Answer their questions specifically based on their resume to help them improve it or prepare for an interview. Keep responses concise and actionable.
 `
-  const model = genAI.getGenerativeModel({
-    model: 'gemini-flash-lite-latest',
-    systemInstruction: { parts: [{ text: systemContext }] }
-  })
-
-  try {
-    const formattedHistory = chatHistory.map((msg) => ({
-      role: msg.role === 'user' ? 'user' : 'model',
-      parts: [{ text: msg.text }]
-    }))
-
-    const chat = model.startChat({
-      history: formattedHistory
+    const model = client.getGenerativeModel({
+      model: 'gemini-flash-lite-latest',
+      systemInstruction: { parts: [{ text: systemContext }] }
     })
 
-    const result = await chat.sendMessage(message)
-    const response = await result.response
-    return res.json({ text: response.text() })
+    try {
+      const formattedHistory = chatHistory.map((msg) => ({
+        role: msg.role === 'user' ? 'user' : 'model',
+        parts: [{ text: msg.text }]
+      }))
+
+      const chat = model.startChat({
+        history: formattedHistory
+      })
+
+      const result = await chat.sendMessage(message)
+      const response = await result.response
+      return res.json({ text: response.text() })
+    } catch (error) {
+      console.error('Error in AI chat:', error)
+      return res.status(500).json({ error: 'Failed to get response. Please try again.' })
+    }
   } catch (error) {
-    console.error('Error in AI chat:', error)
-    return res.status(500).json({ error: 'Failed to get response. Please try again.' })
+    console.error('Missing Gemini configuration:', error.message)
+    return res.status(500).json({ error: 'Server is not configured with GEMINI_API_KEY.' })
   }
 })
 
